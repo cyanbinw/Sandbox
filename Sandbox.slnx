@@ -3,4 +3,5 @@
   <Project Path="Sandbox.Console/Sandbox.Console.csproj" />
   <Project Path="Sandbox.Domain/Sandbox.Domain.csproj" />
   <Project Path="Sandbox.Infrastructure/Sandbox.Infrastructure.csproj" />
+  <Project Path="Sandbox.Model/Sandbox.Model.csproj" Id="4f3441e0-87e2-420e-bf1a-c38c42b7c3cb" />
 </Solution>
