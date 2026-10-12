@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.Json;
 
 namespace Sandbox.Domain.Util
@@ -7,23 +7,36 @@ namespace Sandbox.Domain.Util
     {
         private static readonly HttpClient Http = new();
 
-        public static async Task<double[]> GetClosePricesAsync(
+        /// <summary>
+        /// 获取股票历史日 K 线数据（OHLCV）及股票名称，K 线按交易日期升序返回。
+        /// </summary>
+        /// <param name="stockCode">股票代码，6 位数字。</param>
+        /// <param name="begin">起始日期，默认 2020-01-01。</param>
+        /// <param name="end">结束日期，默认今天。</param>
+        public static async Task<StockKlineResult> GetKlineDataAsync(
             string stockCode,
-            int count = 250)
+            DateOnly? begin = null,
+            DateOnly? end = null)
         {
+            if (string.IsNullOrWhiteSpace(stockCode))
+                throw new ArgumentException("股票代码不能为空", nameof(stockCode));
+
             // 创业板、深市股票使用 0；沪市使用 1
             string market = stockCode.StartsWith('6') ? "1" : "0";
+
+            string beg = (begin ?? new DateOnly(2020, 1, 1)).ToString("yyyyMMdd");
+            string endDate = (end ?? DateOnly.FromDateTime(DateTime.Now)).ToString("yyyyMMdd");
 
             string url =
                 "https://push2his.eastmoney.com/api/qt/stock/kline/get" +
                 $"?secid={market}.{stockCode}" +
                 "&fields1=f1,f2,f3,f4,f5,f6" +
                 "&fields2=f51,f52,f53,f54,f55,f56" +
-                "&klt=101" +            
-                "&fqt=1" +              
-                "&beg=20240101" +
-                "&end=20261009" +
-                $"&lmt={count + 1}";
+                "&klt=101" +
+                "&fqt=1" +
+                $"&beg={beg}" +
+                $"&end={endDate}" +
+                "&lmt=10000";
 
             using var response = await Http.GetAsync(url);
             response.EnsureSuccessStatusCode();
@@ -44,31 +57,50 @@ namespace Sandbox.Domain.Util
                 throw new Exception("klines 不存在或不是数组");
             }
 
-            var prices = klines.EnumerateArray()
-                .Select(item =>
-                {
-                    var fields = item.GetString()!.Split(',');
+            // 股票名称，部分接口返回为空，保持空字符串即可。
+            string stockName = string.Empty;
+            if (data.TryGetProperty("name", out var nameElement) &&
+                nameElement.ValueKind == JsonValueKind.String)
+            {
+                stockName = nameElement.GetString() ?? string.Empty;
+            }
 
-                    return new
-                    {
-                        Date = DateOnly.ParseExact(
-                            fields[0], "yyyy-MM-dd"),
-                        Close = double.Parse(
-                            fields[2],
-                            CultureInfo.InvariantCulture)
-                    };
-                })
-                .OrderBy(x => x.Date)
-                .TakeLast(count)
-                .Select(x => x.Close)
-                .ToArray();
+            var result = new List<StockKlineBar>();
 
-            if (prices.Length < count)
-                throw new Exception(
-                    $"历史数据不足：需要 {count} 条，" +
-                    $"实际获取 {prices.Length} 条");
+            foreach (var item in klines.EnumerateArray())
+            {
+                var fields = item.GetString()!.Split(',');
 
-            return prices;
+                result.Add(new StockKlineBar(
+                    TradeDate: DateOnly.ParseExact(fields[0], "yyyy-MM-dd"),
+                    OpenPrice: decimal.Parse(fields[1], CultureInfo.InvariantCulture),
+                    ClosePrice: decimal.Parse(fields[2], CultureInfo.InvariantCulture),
+                    HighPrice: decimal.Parse(fields[3], CultureInfo.InvariantCulture),
+                    LowPrice: decimal.Parse(fields[4], CultureInfo.InvariantCulture),
+                    Volume: long.Parse(fields[5], CultureInfo.InvariantCulture)));
+            }
+
+            return new StockKlineResult(
+                stockName,
+                result.OrderBy(x => x.TradeDate).ToList());
         }
     }
+
+    /// <summary>
+    /// 股票历史 K 线获取结果，包含股票名称和日 K 线数据。
+    /// </summary>
+    public sealed record StockKlineResult(
+        string StockName,
+        List<StockKlineBar> Bars);
+
+    /// <summary>
+    /// 股票日 K 线一条数据（OHLCV），供导入等场景使用。
+    /// </summary>
+    public sealed record StockKlineBar(
+        DateOnly TradeDate,
+        decimal OpenPrice,
+        decimal HighPrice,
+        decimal LowPrice,
+        decimal ClosePrice,
+        long Volume);
 }

@@ -11,5 +11,7 @@ namespace Sandbox.Infrastructure.Persistence
 
         public DbSet<StockDailyKline> StockDailyKlines { get; set; }
 
+        public DbSet<Stock> Stocks { get; set; }
+
     }
 }

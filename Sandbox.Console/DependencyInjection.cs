@@ -1,9 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
 using Sandbox.Console.Factory;
+using Sandbox.Application.Services;
 using Sandbox.Application.SmallTools;
 using Microsoft.EntityFrameworkCore;
 using Sandbox.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
+using Sandbox.Domain.Calculations;
 
 namespace Sandbox.Console
 {
@@ -11,9 +13,11 @@ namespace Sandbox.Console
     {
         public static IServiceCollection AddSandbox(this IServiceCollection services, IConfiguration configuration)
         {
+            services.AddScoped<StockMonteCarloSimulator>();
             services.AddScoped<WorkerFactory>();
             services.AddScoped<MonteCarloSimulation>();
             services.AddScoped<RetracementCalculator>();
+            services.AddScoped<StockImportService>();
 
             services.AddDbContext<QuantResearchDbContext>(options =>
             {

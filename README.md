@@ -1,6 +1,6 @@
 # Sandbox
 
-基于 .NET 10 的金融计算控制台工具集，包含回撤计算、蒙特卡罗模拟，以及 EF Core SQL Server 数据访问基础设施。
+基于 .NET 10 的金融计算控制台工具集，包含回撤计算、蒙特卡罗模拟、股票数据导入，以及 EF Core SQL Server 数据访问基础设施。
 
 ## 快速开始
 
@@ -12,7 +12,7 @@ dotnet build Sandbox.slnx
 dotnet run --project Sandbox.Console
 ```
 
-在菜单中输入任务编号。任务执行完后按回车返回菜单，输入 `0` 或 `q` 退出。回撤计算不需要数据库或网络；蒙特卡罗模拟需要访问东方财富行情接口。
+在菜单中输入任务编号。任务执行完后按回车返回菜单，输入 `0` 或 `q` 退出。回撤计算不需要数据库或网络；蒙特卡罗模拟优先读取数据库、数据不足时访问东方财富行情接口；股票数据导入需要数据库并访问东方财富行情接口。
 
 ## 当前工具
 
@@ -20,6 +20,7 @@ dotnet run --project Sandbox.Console
 | --- | --- | --- |
 | 1 | 蒙特卡罗模拟 | 对历史日收益率进行随机抽样，估算盈利概率、目标收益概率、触及止损概率和收益分布 |
 | 2 | 回撤计算 | 输入上涨起点与最高价，输出四个常用比例对应的回踩价格 |
+| 3 | 股票数据导入 | 输入股票代码，从东方财富导入历史日 K 线数据到数据库 |
 
 ### 回撤计算
 
@@ -45,16 +46,20 @@ P = H - (H - L) × R
 
 ### 蒙特卡罗模拟
 
-参数目前写在 `Sandbox.Application/SmallTools/MonteCarloSimulation.cs`：股票代码 `300083`、250 条历史收盘价、买入价 10.6、持有 10 天、模拟 100,000 次、目标收益 20%、止损阈值 -10%。修改该文件可调整参数。
+运行时先列出数据库 `Stocks` 表中已导入的股票供选择（可输入 `0` 手动输入代码，或 `q` 退出）；随后依次输入买入价（默认 10.6）、持有天数（默认 10）、模拟次数（默认 100,000）、目标收益率%（默认 20）、止损收益率%（默认 -10）。任意一步输入 `q` 可退出，直接回车使用方括号内的默认值。
 
-历史行情由 `StockHistoryService` 获取，当前请求日期范围固定为 `2024-01-01` 至 `2026-10-09`，不是自动滚动到当天。模拟输出中的“收益超5%概率”文案与当前 20% 目标参数尚不一致；触及止损仅统计路径是否触及阈值，不会提前终止该路径。
+历史行情优先从数据库 `StockDailyKlines` 读取该股票按交易日期升序的最后 250 条收盘价；不足 250 条时回退到 `StockHistoryService` 访问东方财富接口（前复权）。目标收益率与止损阈值按百分数输入，内部换算为小数参与模拟；触及止损仅统计路径是否触及阈值，不会提前终止该路径。
+
+### 股票数据导入
+
+输入 6 位股票代码后，从东方财富拉取历史日 K 线（OHLCV，前复权）及股票名称，按「股票代码 + 交易日期」去重后写入数据库 `StockDailyKlines`（`market.StockDailyKline`）；同时把股票代码与名称写入或更新到 `Stocks`（`market.Stock`）表，供蒙特卡罗模拟选股展示。已存在的日期会被跳过，仅新增缺失记录。默认导入范围 `2024-01-01` 至当天，可通过 `StockHistoryService.GetKlineDataAsync` 的 `begin`/`end` 参数调整。
 
 ## 项目结构
 
 ```text
 Sandbox.Console/          控制台入口、菜单、工具工厂、依赖注入与配置
 Sandbox.Application/      工具实现及应用服务
-Sandbox.Domain/           历史行情获取等逻辑
+Sandbox.Domain/           历史行情获取、蒙特卡罗计算等逻辑
 Sandbox.Infrastructure/   IWorker、WorkType、EF 上下文与数据库实体
 Sandbox.Model/            数据模型
 Sandbox.slnx              解决方案
@@ -100,7 +105,7 @@ dotnet run --project Sandbox.Console
 
 环境变量中的 `__` 对应配置层级分隔符 `:`。代码通过 `configuration.GetConnectionString("QuantResearch")` 读取最终值。
 
-`QuantResearchDbContext` 已通过 `AddDbContext` 注册，使用 SQL Server 提供程序。`StockDailyKlines` 对应 `market.StockDailyKline` 表。当前没有迁移文件，也没有自动建库、建表或更新数据库的启动逻辑；实际读写前需要准备相应数据库结构。`StockImportService` 当前为空类，尚未接入菜单或依赖注入。
+`QuantResearchDbContext` 已通过 `AddDbContext` 注册，使用 SQL Server 提供程序。`StockDailyKlines` 对应 `market.StockDailyKline` 表，`Stocks` 对应 `market.Stock` 表（`StockCode` 唯一索引）。当前没有迁移文件，也没有自动建库、建表或更新数据库的启动逻辑；实际读写前需要准备相应数据库结构。
 
 ## 依赖注入与新增工具
 
@@ -108,7 +113,7 @@ dotnet run --project Sandbox.Console
 
 新增工具的步骤：
 
-1. 在 `Sandbox.Application/SmallTools` 创建类，实现 `IWorker` 的 `Run()` 和 `RunAsync()`。
+1. 在 `Sandbox.Application` 下创建类（如 `SmallTools` 或 `Services` 目录），实现 `IWorker` 的 `Run()` 和 `RunAsync()`。
 2. 在 `WorkType` 中新增枚举项，使用非零且不重复的编号，`0` 保留为退出操作。
 3. 在 `AddSandbox` 中添加 `services.AddScoped<YourWorker>();`。
 4. 在 `WorkerFactory` 构造函数中注册菜单项：

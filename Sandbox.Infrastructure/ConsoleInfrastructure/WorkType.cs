@@ -7,6 +7,7 @@ namespace Sandbox.Infrastructure.ConsoleInfrastructure
     public enum WorkType
     {
         MonteCarloSimulation = 1,
-        RetracementCalculator
+        RetracementCalculator,
+        StockImport
     }
 }
