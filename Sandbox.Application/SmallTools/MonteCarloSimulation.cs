@@ -9,7 +9,7 @@ namespace Sandbox.Application.SmallTools
 {
     public class MonteCarloSimulation : LoopWorkerBase
     {
-        private const int RequiredHistoryCount = 250;
+        private const int DefaultHistoryCount = 500;
 
         private readonly QuantResearchDbContext db;
         private readonly StockMonteCarloSimulator simulator;
@@ -31,6 +31,16 @@ namespace Sandbox.Application.SmallTools
             var stockCode = await SelectStockAsync();
             if (stockCode == null)
                 return WorkerLoopResult.Exit;
+
+            int? historyCount;
+            do
+            {
+                historyCount = ReadInt("请输入历史样本条数（至少 2 条，0 使用全部可用历史）", DefaultHistoryCount, 0, int.MaxValue);
+                if (historyCount == null)
+                    return WorkerLoopResult.Exit;
+                if (historyCount == 1)
+                    Console.WriteLine("至少需要 2 条收盘价才能计算日收益率。");
+            } while (historyCount == 1);
 
             Console.WriteLine("模型假设按输入买入价开始持仓；改变买入价不改变收益率概率。");
             var buyPrice = ReadDouble("请输入买入价", 10.6, value => value > 0);
@@ -65,7 +75,7 @@ namespace Sandbox.Application.SmallTools
                 return WorkerLoopResult.Exit;
 
             Console.WriteLine("止损按每日收盘判断，执行模式假设按触发日收盘价成交；往返成本为本金的 0.1%。");
-            double[] closePrices = await GetClosePricesAsync(stockCode, RequiredHistoryCount);
+            double[] closePrices = await GetClosePricesAsync(stockCode, historyCount.Value);
 
             var result = simulator.Simulate(
                 closePrices: closePrices,
@@ -98,32 +108,40 @@ namespace Sandbox.Application.SmallTools
             // 排除当天尚未完成的日线；不将周末、节假日误判为缺失交易日。
             var today = DateOnly.FromDateTime(DateTime.Today);
             var refreshSince = DateTime.Today.ToUniversalTime();
-            var rows = await db.StockDailyKlines
+            var query = db.StockDailyKlines
                 .AsNoTracking()
                 .Where(k => k.StockCode == stockCode && k.AdjustType == 1 &&
                     k.DataSource == "EastMoney" && k.TradeDate < today)
                 .OrderByDescending(k => k.TradeDate)
-                .Take(count)
-                .Select(k => new { k.TradeDate, k.ClosePrice, k.UpdatedAt })
+                .AsQueryable();
+            if (count > 0)
+                query = query.Take(count);
+
+            var rows = await query.Select(k => new { k.TradeDate, k.ClosePrice, k.UpdatedAt })
                 .ToListAsync();
 
             // 要求整个窗口由同一批次在今天刷新，保证复权口径一致。
-            if (rows.Count == count && rows.All(k => k.UpdatedAt >= refreshSince) &&
+            if (rows.Count >= 2 && (count == 0 || rows.Count == count) && rows.All(k => k.UpdatedAt >= refreshSince) &&
                 rows.Select(k => k.UpdatedAt).Distinct().Count() == 1 &&
-                rows.Select(k => k.TradeDate).Distinct().Count() == count)
+                rows.Select(k => k.TradeDate).Distinct().Count() == rows.Count)
             {
                 rows.Reverse();
-                Console.WriteLine($"数据库样本：{rows[0].TradeDate:yyyy-MM-dd} ～ {rows[^1].TradeDate:yyyy-MM-dd}，{count} 条，东方财富前复权。");
+                Console.WriteLine($"数据库样本：{rows[0].TradeDate:yyyy-MM-dd} ～ {rows[^1].TradeDate:yyyy-MM-dd}，{rows.Count} 条，东方财富前复权{(count == 0 ? "（全部已入库历史）" : "")}。");
                 return rows.Select(k => (double)k.ClosePrice).ToArray();
             }
 
             Console.WriteLine("历史窗口不足、未在今天完整刷新或复权批次不一致，重新从接口获取完整样本...");
             var result = await StockHistoryService.GetKlineDataAsync(stockCode, end: today.AddDays(-1));
-            var bars = result.Bars.Where(b => b.TradeDate < today).OrderBy(b => b.TradeDate).TakeLast(count).ToArray();
-            if (bars.Length < count || bars.Select(b => b.TradeDate).Distinct().Count() != count)
-                throw new InvalidOperationException($"历史数据不足或日期重复：需要 {count} 条，实际获取 {bars.Length} 条");
+            IEnumerable<StockKlineBar> selectedBars = result.Bars.Where(b => b.TradeDate < today).OrderBy(b => b.TradeDate);
+            if (count > 0)
+                selectedBars = selectedBars.TakeLast(count);
+            var bars = selectedBars.ToArray();
+            if (bars.Length < Math.Max(2, count) || bars.Select(b => b.TradeDate).Distinct().Count() != bars.Length)
+                throw new InvalidOperationException($"历史数据不足或日期重复：至少需要 {Math.Max(2, count)} 条，实际获取 {bars.Length} 条");
 
-            Console.WriteLine($"接口样本：{bars[0].TradeDate:yyyy-MM-dd} ～ {bars[^1].TradeDate:yyyy-MM-dd}，{count} 条，东方财富前复权（本次未写入数据库）。");
+            Console.WriteLine($"接口样本：{bars[0].TradeDate:yyyy-MM-dd} ～ {bars[^1].TradeDate:yyyy-MM-dd}，{bars.Length} 条，东方财富前复权（本次未写入数据库）。");
+            if (count == 0)
+                Console.WriteLine("全部历史使用当前接口返回的可用数据：默认从 2020-01-01 开始，单次请求上限 10000 条。");
             return bars.Select(bar => (double)bar.ClosePrice).ToArray();
         }
         /// <summary>
