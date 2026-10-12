@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Sandbox.Domain.Util;
 using Sandbox.Infrastructure.ConsoleInfrastructure;
 using Sandbox.Infrastructure.Persistence;
@@ -8,7 +8,7 @@ namespace Sandbox.Application.Services
 {
     /// <summary>
     /// 股票数据导入：根据用户填写的股票代码，从东方财富拉取历史日 K 线数据并写入数据库。
-    /// 已存在的（按股票代码 + 交易日期）记录会被跳过，避免重复导入。
+    /// 按股票代码、复权类型、数据来源及交易日期更新或新增记录。
     /// </summary>
     public class StockImportService : IWorker
     {
@@ -43,41 +43,40 @@ namespace Sandbox.Application.Services
             // 更新股票基础信息（代码 + 名称），供选股展示使用。
             await UpsertStockAsync(stockCode, result.StockName);
 
-            // 已入库的交易日期，用于跳过重复记录。
-            var existingDates = await db.StockDailyKlines
-                .AsNoTracking()
-                .Where(k => k.StockCode == stockCode)
-                .Select(k => k.TradeDate)
+            // 同一次拉取刷新整个返回区间，避免前复权历史价格与旧版本拼接。
+            var firstDate = bars.Min(b => b.TradeDate);
+            var lastDate = bars.Max(b => b.TradeDate);
+            var existingRows = await db.StockDailyKlines
+                .Where(k => k.StockCode == stockCode && k.AdjustType == 1 &&
+                    k.DataSource == DataSource && k.TradeDate >= firstDate && k.TradeDate <= lastDate)
                 .ToListAsync();
-
-            var existingSet = existingDates.ToHashSet();
-
-            var newRows = bars
-                .Where(b => !existingSet.Contains(b.TradeDate))
-                .Select(b => new StockDailyKline
+            var rowsByDate = existingRows.ToDictionary(k => k.TradeDate);
+            var updatedAt = DateTime.UtcNow;
+            var added = 0;
+            foreach (var bar in bars)
+            {
+                if (!rowsByDate.TryGetValue(bar.TradeDate, out var row))
                 {
-                    StockCode = stockCode,
-                    TradeDate = b.TradeDate,
-                    OpenPrice = b.OpenPrice,
-                    HighPrice = b.HighPrice,
-                    LowPrice = b.LowPrice,
-                    ClosePrice = b.ClosePrice,
-                    Volume = b.Volume,
-                    AdjustType = 1,
-                    DataSource = DataSource
-                })
-                .ToList();
-
-            if (newRows.Count > 0)
-                db.StockDailyKlines.AddRange(newRows);
+                    row = new StockDailyKline
+                    {
+                        StockCode = stockCode, TradeDate = bar.TradeDate,
+                        AdjustType = 1, DataSource = DataSource
+                    };
+                    db.StockDailyKlines.Add(row);
+                    rowsByDate.Add(bar.TradeDate, row);
+                    added++;
+                }
+                row.OpenPrice = bar.OpenPrice;
+                row.HighPrice = bar.HighPrice;
+                row.LowPrice = bar.LowPrice;
+                row.ClosePrice = bar.ClosePrice;
+                row.Volume = bar.Volume;
+                row.UpdatedAt = updatedAt;
+            }
 
             await db.SaveChangesAsync();
-
-            Console.WriteLine(newRows.Count == 0
-                ? $"股票 {stockCode} 的数据已是最新，无需导入。"
-                : $"导入完成：本次新增 {newRows.Count} 条，跳过已存在 {bars.Count - newRows.Count} 条。");
+            Console.WriteLine($"导入完成：新增 {added} 条，刷新 {bars.Count - added} 条前复权数据。");
         }
-
         private async Task UpsertStockAsync(string stockCode, string stockName)
         {
             var stock = await db.Stocks.FirstOrDefaultAsync(s => s.StockCode == stockCode);
