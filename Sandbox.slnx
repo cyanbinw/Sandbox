@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Sandbox.Application/Sandbox.Application.csproj" />
+  <Project Path="Sandbox.Console/Sandbox.Console.csproj" />
+  <Project Path="Sandbox.Domain/Sandbox.Domain.csproj" />
+  <Project Path="Sandbox.Infrastructure/Sandbox.Infrastructure.csproj" />
+</Solution>
