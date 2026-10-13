@@ -112,6 +112,34 @@ namespace Sandbox.Application.SmallTools
             Console.WriteLine("止损按补仓前的每日收盘持仓收益率判断，执行模式按触发日收盘价成交；收益率以累计投入为分母，往返成本为累计投入的 0.1%。");
             double[] closePrices = await GetClosePricesAsync(stockCode, historyCount.Value);
 
+            var algorithmChoice = ReadInt("路径算法：1 Moving Block Bootstrap（移动区块重采样），2 原有独立日收益率重采样", 1, 1, 2);
+            if (algorithmChoice == null)
+                return WorkerLoopResult.Exit;
+            var algorithm = algorithmChoice == 1
+                ? StockMonteCarloSimulator.SamplingAlgorithm.MovingBlockBootstrap
+                : StockMonteCarloSimulator.SamplingAlgorithm.IndependentDaily;
+            int blockLength = 5;
+            if (algorithm == StockMonteCarloSimulator.SamplingAlgorithm.MovingBlockBootstrap)
+            {
+                if (closePrices.Length <= 5)
+                    Console.WriteLine("历史收益率不足默认的 5 个交易日，请明确输入不超过现有收益率数量的区块长度。");
+                while (true)
+                {
+                    var length = ReadInt($"请输入区块交易日数（1～{closePrices.Length - 1}）", 5, 1, closePrices.Length - 1);
+                    if (length == null)
+                        return WorkerLoopResult.Exit;
+                    if (length < closePrices.Length)
+                    {
+                        blockLength = length.Value;
+                        break;
+                    }
+                    Console.WriteLine("默认区块长度超过可用历史，请输入有效长度。");
+                }
+            }
+            Console.WriteLine(algorithmChoice == 1
+                ? $"路径算法：Moving Block Bootstrap，区块长度：{blockLength} 个交易日。"
+                : "路径算法：原有独立日收益率重采样。");
+
             var result = simulator.Simulate(
                 closePrices: closePrices,
                 buyPrice: buyPrice.Value,
@@ -121,7 +149,9 @@ namespace Sandbox.Application.SmallTools
                 stopLossReturn: stopLossReturn.Value / 100,
                 executeStopLoss: mode == 2,
                 seed: seed.Value,
-                averagingDown: averagingDown
+                averagingDown: averagingDown,
+                algorithm: algorithm,
+                blockLength: blockLength
             );
 
             Console.WriteLine($"盈利概率：{result.ProfitProbability:P2}");

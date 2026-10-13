@@ -9,6 +9,11 @@ namespace Sandbox.Domain.Calculations
         public const int MaxHoldingDays = 2520;
         public const int MaxSimulations = 1_000_000;
         public const long MaxPathSteps = 100_000_000;
+        public enum SamplingAlgorithm
+        {
+            IndependentDaily,
+            MovingBlockBootstrap
+        }
         /// <summary>DropFraction 为当前持仓亏损触发比例（不含交易成本）；每次投入按初始本金的比例计算，两个上限为 null 时均表示无限。</summary>
         public sealed record AveragingDownOptions(
             double DropFraction = 0.05,
@@ -40,9 +45,16 @@ namespace Sandbox.Domain.Calculations
                 double roundTripCostRate = 0.001,
                 bool executeStopLoss = false,
                 int seed = 42,
-                AveragingDownOptions? averagingDown = null)
+                AveragingDownOptions? averagingDown = null,
+                SamplingAlgorithm algorithm = SamplingAlgorithm.IndependentDaily,
+                int blockLength = 5)
         {
             ArgumentNullException.ThrowIfNull(closePrices);
+            if (!Enum.IsDefined(algorithm))
+                throw new ArgumentException("未知的模拟算法。", nameof(algorithm));
+            if (algorithm == SamplingAlgorithm.MovingBlockBootstrap &&
+                (blockLength <= 0 || blockLength >= closePrices.Length))
+                throw new ArgumentException("区块长度必须为正整数且不能超过历史收益率数量（收盘价条数减一）。", nameof(blockLength));
             if (closePrices.Length < 2 ||
                 closePrices.Any(p => !double.IsFinite(p) || p <= 0) ||
                 !double.IsFinite(buyPrice) || buyPrice <= 0 ||
@@ -94,14 +106,27 @@ namespace Sandbox.Domain.Calculations
                 double invested = 1;
                 double positionValue = 1;
                 int additions = 0;
+                int blockStart = 0;
 
                 for (int day = 0; day < holdingDays; day++)
                 {
                     // 止损后仍生成余下的假想路径，让两种模式在相同种子下使用相同样本。
                     // 实际止损收益只使用首次触发时记录的 exitEquity。
-                    // 从历史收益率中随机抽一天
-                    double dailyReturn =
-                        returns[random.Next(returns.Length)];
+                    double dailyReturn;
+                    if (algorithm == SamplingAlgorithm.MovingBlockBootstrap)
+                    {
+                        // 从所有重叠的完整区块中等概率、有放回抽样，不跨历史末尾循环。
+                        // 每条路径重新开始区块；最后一个区块只使用剩余所需天数。
+                        int offset = day % blockLength;
+                        if (offset == 0)
+                            blockStart = random.Next(returns.Length - blockLength + 1);
+                        dailyReturn = returns[blockStart + offset];
+                    }
+                    else
+                    {
+                        // 保留原算法的随机调用顺序和结果。
+                        dailyReturn = returns[random.Next(returns.Length)];
+                    }
 
                     equity *= 1 + dailyReturn;
                     if (!double.IsFinite(equity) || equity <= 0)

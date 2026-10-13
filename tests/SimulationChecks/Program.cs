@@ -127,4 +127,55 @@ Reject(() => simulator.Simulate([100, 80], 100, averagingDown: unlimited with { 
 Reject(() => simulator.Simulate([100, 80], 100, averagingDown: unlimited with { MaxAdditions = -1 }));
 Reject(() => simulator.Simulate([100, 80], 100, averagingDown: unlimited with { MaxInvestedMultiple = 0.5 }));
 Reject(() => simulator.Simulate([100, 80], 100, averagingDown: unlimited with { MaxInvestedMultiple = double.PositiveInfinity }));
+var block = StockMonteCarloSimulator.SamplingAlgorithm.MovingBlockBootstrap;
+// Length one must exactly reproduce the original independent sampler, including strategy results.
+foreach (var execute in new[] { false, true })
+{
+    var original = simulator.Simulate(history, 10, 17, 1000, seed: 7,
+        executeStopLoss: execute, averagingDown: unlimited);
+    var unitBlock = simulator.Simulate(history, 10, 17, 1000, seed: 7,
+        executeStopLoss: execute, averagingDown: unlimited, algorithm: block, blockLength: 1);
+    if (original != unitBlock) throw new Exception("Unit blocks changed original strategy results.");
+    checks++;
+}
+// One available block gives an exact ordered path; repeat it and truncate the final block.
+double[] ordered = [100, 80, 120, 90, 110, 130];
+var exactBlock = simulator.Simulate(ordered, 100, 7, 20, algorithm: block);
+Near(exactBlock.AverageReturn, 1.3 * 1.2 - 1 - 0.001);
+var blockStop = simulator.Simulate(ordered, 100, 7, 20, algorithm: block, executeStopLoss: true,
+    averagingDown: unlimited);
+Near(blockStop.AverageReturn, -0.201);
+Near(blockStop.AverageAdditions, 0);
+var blockAdd = simulator.Simulate(ordered, 100, 2, 20, algorithm: block, averagingDown: unlimited);
+Near(blockAdd.AverageReturn, 1.8 * 1.5 / 2 - 1 - 0.001);
+Near(blockAdd.AverageAdditions, 1);
+// Independent reference using an explicit list of all overlapping blocks.
+double[][] blocks = [[0.8, 1.5], [1.5, 0.75], [0.75, 110.0 / 90], [110.0 / 90, 130.0 / 110]];
+var rng = new Random(19);
+double expectedAverage = 0;
+for (int path = 0; path < 100; path++)
+{
+    double value = 1;
+    var days = 0;
+    while (days < 7)
+    {
+        foreach (var factor in blocks[rng.Next(blocks.Length)])
+        {
+            value *= factor;
+            if (++days == 7) break;
+        }
+    }
+    expectedAverage += (value - 1 - 0.001) / 100;
+}
+var sampled = simulator.Simulate(ordered, 100, 7, 100, seed: 19, algorithm: block, blockLength: 2);
+Near(sampled.AverageReturn, expectedAverage);
+if (sampled != simulator.Simulate(ordered, 100, 7, 100, seed: 19, algorithm: block, blockLength: 2))
+    throw new Exception("Block seed is not reproducible.");
+checks++;
+Near(sampled.StopLossProbability, simulator.Simulate(ordered, 100, 7, 100, seed: 19,
+    algorithm: block, blockLength: 2, executeStopLoss: true).StopLossProbability);
+Reject(() => simulator.Simulate(history, 100, algorithm: block, blockLength: 0));
+Reject(() => simulator.Simulate(history, 100, algorithm: block, blockLength: -1));
+Reject(() => simulator.Simulate(history, 100, algorithm: block));
+Reject(() => simulator.Simulate(history, 100, algorithm: (StockMonteCarloSimulator.SamplingAlgorithm)99));
 Console.WriteLine($"Passed {checks} simulation checks.");

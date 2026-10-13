@@ -39,10 +39,4 @@ while (flag)
         else
             flag = false;
     }
-
-    if (flag)
-    {
-        Console.WriteLine("\n按任意键继续...");
-        Console.ReadLine();
-    }
 }
