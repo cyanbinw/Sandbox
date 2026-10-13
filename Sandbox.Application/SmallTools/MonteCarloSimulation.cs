@@ -70,11 +70,46 @@ namespace Sandbox.Application.SmallTools
             var mode = ReadInt("模式：1 持有到期，2 按触发日收盘价止损", 1, 1, 2);
             if (mode == null)
                 return WorkerLoopResult.Exit;
+
+            var enableAveraging = ReadInt("是否启用补仓：0 否，1 是", 0, 0, 1);
+            if (enableAveraging == null)
+                return WorkerLoopResult.Exit;
+            StockMonteCarloSimulator.AveragingDownOptions? averagingDown = null;
+            double initialInvestment = 1;
+            if (enableAveraging == 1)
+            {
+                var initial = ReadDouble("请输入初始投入金额", 10000, value => value > 0);
+                if (initial == null)
+                    return WorkerLoopResult.Exit;
+                initialInvestment = initial.Value;
+                var drop = ReadDouble("当前持仓亏损达到多少百分比时补仓（如 5 或 10，大于 0，小于 100）", 5, value => value > 0 && value < 100);
+                if (drop == null)
+                    return WorkerLoopResult.Exit;
+                var amount = ReadDouble("每次补仓金额", initialInvestment,
+                    value => value > 0 && double.IsFinite(value / initialInvestment) && value / initialInvestment > 0);
+                if (amount == null)
+                    return WorkerLoopResult.Exit;
+                var maxAdditions = ReadInt("补仓次数上限（0 不补仓，-1 无限）", 3, -1, int.MaxValue);
+                if (maxAdditions == null)
+                    return WorkerLoopResult.Exit;
+                var maxInvestment = ReadDouble("累计投入金额上限（含初始投入，-1 无限）", -1,
+                    value => value == -1 || (value >= initialInvestment && double.IsFinite(value / initialInvestment)));
+                if (maxInvestment == null)
+                    return WorkerLoopResult.Exit;
+                averagingDown = new(
+                    DropFraction: drop.Value / 100,
+                    InvestmentFraction: amount.Value / initialInvestment,
+                    MaxAdditions: maxAdditions == -1 ? null : maxAdditions.Value,
+                    MaxInvestedMultiple: maxInvestment == -1 ? null : maxInvestment.Value / initialInvestment);
+                Console.WriteLine($"补仓：当前持仓亏损达到 {drop.Value:0.####}% 时投入 {amount.Value:0.##}；次数上限：{(maxAdditions == -1 ? "无限" : maxAdditions.Value.ToString())}；累计投入上限：{(maxInvestment == -1 ? "无限" : maxInvestment.Value.ToString("0.##"))}。");
+                Console.WriteLine("触发盈亏 =（持仓市值 - 累计投入）/ 累计投入，不含交易成本；补仓后更新成本，后续交易日仍满足亏损条件则继续补仓。");
+                Console.WriteLine("每日收盘最多补仓一次，剩余额度不足时按余额补入；执行止损优先于补仓。允许零股，不计最小交易单位。");
+            }
             var seed = ReadInt("请输入随机种子（相同参数可复现）", 42, int.MinValue, int.MaxValue);
             if (seed == null)
                 return WorkerLoopResult.Exit;
 
-            Console.WriteLine("止损按每日收盘判断，执行模式假设按触发日收盘价成交；往返成本为本金的 0.1%。");
+            Console.WriteLine("止损按补仓前的每日收盘持仓收益率判断，执行模式按触发日收盘价成交；收益率以累计投入为分母，往返成本为累计投入的 0.1%。");
             double[] closePrices = await GetClosePricesAsync(stockCode, historyCount.Value);
 
             var result = simulator.Simulate(
@@ -85,7 +120,8 @@ namespace Sandbox.Application.SmallTools
                 targetReturn: targetReturn.Value / 100,
                 stopLossReturn: stopLossReturn.Value / 100,
                 executeStopLoss: mode == 2,
-                seed: seed.Value
+                seed: seed.Value,
+                averagingDown: averagingDown
             );
 
             Console.WriteLine($"盈利概率：{result.ProfitProbability:P2}");
@@ -96,6 +132,11 @@ namespace Sandbox.Application.SmallTools
             Console.WriteLine($"收益率中位数：{result.MedianReturn:P2}");
             Console.WriteLine($"收益率5%分位：{result.P5Return:P2}");
             Console.WriteLine($"收益率95%分位：{result.P95Return:P2}");
+            if (averagingDown != null)
+            {
+                Console.WriteLine($"平均补仓次数：{result.AverageAdditions:0.##}，单路径最多补仓次数：{result.MaxAdditionsObserved}");
+                Console.WriteLine($"平均累计投入：{result.AverageInvestedMultiple * initialInvestment:0.##}（初始本金的 {result.AverageInvestedMultiple:0.####} 倍）");
+            }
             Console.WriteLine("\n本次模拟完成，请继续选择股票；输入 q 返回工具菜单。");
             return WorkerLoopResult.Continue;
         }
@@ -121,8 +162,7 @@ namespace Sandbox.Application.SmallTools
                 .ToListAsync();
 
             // 要求整个窗口由同一批次在今天刷新，保证复权口径一致。
-            if (rows.Count >= 2 && (count == 0 || rows.Count == count) && rows.All(k => k.UpdatedAt >= refreshSince) &&
-                rows.Select(k => k.UpdatedAt).Distinct().Count() == 1 &&
+            if (rows.Count >= 2 && (count == 0 || rows.Count == count) &&
                 rows.Select(k => k.TradeDate).Distinct().Count() == rows.Count)
             {
                 rows.Reverse();

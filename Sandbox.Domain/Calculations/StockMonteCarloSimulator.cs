@@ -9,6 +9,13 @@ namespace Sandbox.Domain.Calculations
         public const int MaxHoldingDays = 2520;
         public const int MaxSimulations = 1_000_000;
         public const long MaxPathSteps = 100_000_000;
+        /// <summary>DropFraction 为当前持仓亏损触发比例（不含交易成本）；每次投入按初始本金的比例计算，两个上限为 null 时均表示无限。</summary>
+        public sealed record AveragingDownOptions(
+            double DropFraction = 0.05,
+            double InvestmentFraction = 1,
+            int? MaxAdditions = null,
+            double? MaxInvestedMultiple = null);
+
         public sealed record SimulationResult(
             double ProfitProbability,
             double TargetProbability,
@@ -16,7 +23,12 @@ namespace Sandbox.Domain.Calculations
             double AverageReturn,
             double MedianReturn,
             double P5Return,
-            double P95Return);
+            double P95Return)
+        {
+            public double AverageAdditions { get; init; }
+            public int MaxAdditionsObserved { get; init; }
+            public double AverageInvestedMultiple { get; init; } = 1;
+        }
 
         public SimulationResult Simulate(
                 double[] closePrices,
@@ -27,7 +39,8 @@ namespace Sandbox.Domain.Calculations
                 double stopLossReturn = -0.05,
                 double roundTripCostRate = 0.001,
                 bool executeStopLoss = false,
-                int seed = 42)
+                int seed = 42,
+                AveragingDownOptions? averagingDown = null)
         {
             ArgumentNullException.ThrowIfNull(closePrices);
             if (closePrices.Length < 2 ||
@@ -40,6 +53,13 @@ namespace Sandbox.Domain.Calculations
                 !double.IsFinite(stopLossReturn) || Math.Abs(stopLossReturn) >= 1 ||
                 !double.IsFinite(roundTripCostRate) || roundTripCostRate < 0 || roundTripCostRate >= 1)
                 throw new ArgumentException("模拟参数无效");
+
+            if (averagingDown is { } options &&
+                (!double.IsFinite(options.DropFraction) || options.DropFraction <= 0 || options.DropFraction >= 1 ||
+                 !double.IsFinite(options.InvestmentFraction) || options.InvestmentFraction <= 0 ||
+                 options.MaxAdditions < 0 ||
+                 (options.MaxInvestedMultiple is { } cap && (!double.IsFinite(cap) || cap < 1))))
+                throw new ArgumentException("补仓参数无效", nameof(averagingDown));
 
             // 接受正负两种写法，均表示相同的亏损止损幅度。
             stopLossReturn = -Math.Abs(stopLossReturn);
@@ -60,6 +80,9 @@ namespace Sandbox.Domain.Calculations
             int profitCount = 0;
             int targetCount = 0;
             int stopLossCount = 0;
+            long totalAdditions = 0;
+            int maxAdditionsObserved = 0;
+            double averageInvestedMultiple = 0;
 
             // 2. 开始蒙特卡罗模拟
             for (int i = 0; i < simulations; i++)
@@ -68,6 +91,9 @@ namespace Sandbox.Domain.Calculations
                 double equity = 1;
                 double exitEquity = 0;
                 bool touchedStop = false;
+                double invested = 1;
+                double positionValue = 1;
+                int additions = 0;
 
                 for (int day = 0; day < holdingDays; day++)
                 {
@@ -81,18 +107,48 @@ namespace Sandbox.Domain.Calculations
                     if (!double.IsFinite(equity) || equity <= 0)
                         throw new InvalidOperationException("模拟路径发生数值溢出，请检查历史价格或缩短持有期。");
 
-                    // 检查是否触及止损价格
-                    if (equity - 1 <= stopLossReturn && !touchedStop)
+                    if (executeStopLoss && touchedStop)
+                        continue;
+
+                    positionValue *= 1 + dailyReturn;
+                    if (!double.IsFinite(positionValue) || positionValue <= 0)
+                        throw new InvalidOperationException("持仓市值发生数值溢出，请调整模拟参数。");
+
+                    // 用累计投入计算持仓收益；同日先判断止损，再决定是否补仓。
+                    double positionReturn = positionValue / invested - 1;
+                    if (positionReturn <= stopLossReturn && !touchedStop)
                     {
                         touchedStop = true;
                         // 按触发日模拟收盘价退出，不假设能按止损阈值成交。
-                        exitEquity = equity;
+                        exitEquity = positionValue / invested;
+                    }
+                    if (executeStopLoss && touchedStop)
+                        continue;
+
+                    // 当前持仓亏损达到阈值时补仓，每个收盘最多一次，无需重新穿越阈值。
+                    if (averagingDown is { } strategy &&
+                        (!strategy.MaxAdditions.HasValue || additions < strategy.MaxAdditions.Value) &&
+                        (!strategy.MaxInvestedMultiple.HasValue || invested < strategy.MaxInvestedMultiple.Value) &&
+                        positionReturn <= -strategy.DropFraction)
+                    {
+                        double amount = strategy.MaxInvestedMultiple is { } limit
+                            ? Math.Min(strategy.InvestmentFraction, limit - invested)
+                            : strategy.InvestmentFraction;
+                        invested += amount;
+                        positionValue += amount;
+                        if (!double.IsFinite(invested) || !double.IsFinite(positionValue))
+                            throw new InvalidOperationException("补仓金额发生数值溢出，请减少单次投入或补仓次数。");
+                        additions++;
                     }
                 }
 
                 // 3. 计算扣除交易成本后的最终收益
                 double netReturn =
-                    (executeStopLoss && touchedStop ? exitEquity : equity) - 1 - roundTripCostRate;
+                    (executeStopLoss && touchedStop ? exitEquity : positionValue / invested) - 1 - roundTripCostRate;
+
+                totalAdditions += additions;
+                maxAdditionsObserved = Math.Max(maxAdditionsObserved, additions);
+                averageInvestedMultiple += invested / simulations;
 
                 finalReturns[i] = netReturn;
 
@@ -116,7 +172,12 @@ namespace Sandbox.Domain.Calculations
                 MedianReturn: Percentile(finalReturns, 0.50),
                 P5Return: Percentile(finalReturns, 0.05),
                 P95Return: Percentile(finalReturns, 0.95)
-            );
+            )
+            {
+                AverageAdditions = (double)totalAdditions / simulations,
+                MaxAdditionsObserved = maxAdditionsObserved,
+                AverageInvestedMultiple = averageInvestedMultiple
+            };
         }
 
         private static double Percentile(double[] sorted, double p)
