@@ -1,8 +1,10 @@
-﻿using Sandbox.Console.Factory;
+using Sandbox.Console.Factory;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Sandbox.Console;
+
+System.Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 var environmentName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
 if (string.IsNullOrWhiteSpace(environmentName))

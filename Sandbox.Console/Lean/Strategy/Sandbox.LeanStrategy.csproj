@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LeanRoot Condition="'$(LeanRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\Lean</LeanRoot>
+    <LeanBin Condition="'$(LeanBin)' == ''">$(LeanRoot)\Launcher\bin\Debug</LeanBin>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="QuantConnect.Algorithm"><HintPath>$(LeanBin)\QuantConnect.Algorithm.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="QuantConnect.Common"><HintPath>$(LeanBin)\QuantConnect.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="NodaTime"><HintPath>$(LeanBin)\NodaTime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Python.Runtime"><HintPath>$(LeanBin)\Python.Runtime.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="CheckLean" BeforeTargets="ResolveReferences" Condition="!Exists('$(LeanBin)\QuantConnect.Algorithm.dll')">
+    <Error Text="请先构建 Lean/Launcher，或传入 -p:LeanBin=引擎输出目录。" />
+  </Target>
+</Project>

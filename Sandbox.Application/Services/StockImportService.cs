@@ -29,7 +29,30 @@ namespace Sandbox.Application.Services
             if (stockCode == null)
                 return;
 
-            var endDate = DateOnly.FromDateTime(DateTime.Today);
+            await ImportAsync(stockCode);
+        }
+
+        internal async Task ImportAsync(string stockCode)
+        {
+            // UpdatedAt 存 UTC，按中国交易日历的自然日判断是否已更新。
+            var chinaTimeZone = TimeZoneInfo.FindSystemTimeZoneById("China Standard Time");
+            var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, chinaTimeZone).Date;
+            var dayStartUtc = TimeZoneInfo.ConvertTimeToUtc(today, chinaTimeZone);
+            var dayEndUtc = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1), chinaTimeZone);
+            // 导入会统一刷新返回区间；以最新交易日记录的更新时间判断，
+            // 避免接口返回区间之外的旧记录导致每天反复刷新。
+            var latestUpdatedAt = await db.StockDailyKlines.AsNoTracking()
+                .Where(k => k.StockCode == stockCode && k.AdjustType == 1 && k.DataSource == DataSource)
+                .OrderByDescending(k => k.TradeDate)
+                .Select(k => (DateTime?)k.UpdatedAt)
+                .FirstOrDefaultAsync();
+            if (latestUpdatedAt >= dayStartUtc && latestUpdatedAt < dayEndUtc)
+            {
+                Console.WriteLine($"{stockCode} 今天已更新，跳过本次更新。");
+                return;
+            }
+
+            var endDate = DateOnly.FromDateTime(today);
             Console.WriteLine($"正在获取 {stockCode} 截至 {endDate:yyyy-MM-dd} 的历史日 K 线数据...");
             var result = await StockHistoryService.GetKlineDataAsync(stockCode, end: endDate);
             var bars = result.Bars;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -8,6 +8,9 @@ namespace Sandbox.Infrastructure.ConsoleInfrastructure
     {
         MonteCarloSimulation = 1,
         RetracementCalculator,
-        StockImport
+        StockImport,
+        StockUpdate,
+        DefaultMonteCarloSimulation,
+        LeanSimulation
     }
 }

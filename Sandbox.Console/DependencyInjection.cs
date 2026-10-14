@@ -15,9 +15,12 @@ namespace Sandbox.Console
         {
             services.AddScoped<StockMonteCarloSimulator>();
             services.AddScoped<WorkerFactory>();
+            services.AddScoped<Lean.LeanSimulationWorker>();
             services.AddScoped<MonteCarloSimulation>();
+            services.AddScoped<DefaultMonteCarloSimulation>();
             services.AddScoped<RetracementCalculator>();
             services.AddScoped<StockImportService>();
+            services.AddScoped<StockUpdateService>();
 
             services.AddDbContext<QuantResearchDbContext>(options =>
             {

@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/tests/">
     <Project Path="tests/SimulationChecks/SimulationChecks.csproj" />
+    <Project Path="tests/LeanChecks/LeanChecks.csproj" />
   </Folder>
   <Project Path="Sandbox.Application/Sandbox.Application.csproj" />
   <Project Path="Sandbox.Console/Sandbox.Console.csproj" />

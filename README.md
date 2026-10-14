@@ -64,6 +64,10 @@ dotnet run --project tests/SimulationChecks/SimulationChecks.csproj
 
 输入 6 位股票代码后，从东方财富拉取历史日 K 线（OHLCV，前复权）及股票名称，按「股票代码 + 复权类型 + 数据来源 + 交易日期」新增或刷新数据库 `StockDailyKlines`（`market.StockDailyKline`）；同时更新 `Stocks`（`market.Stock`）表。返回区间内已存在的行情也会刷新，并记录相同批次更新时间，避免不同版本的前复权价格拼接。默认导入范围 `2020-01-01` 至当天，可通过 `StockHistoryService.GetKlineDataAsync` 的 `begin`/`end` 参数调整。
 
+### 更新已有股票数据
+
+选择菜单中的「更新已有股票数据」后，自动按股票代码顺序批量更新库内所有股票（包括仅有东方财富前复权行情记录的股票）。第一只立即处理，此后每只在上一只处理完成后等待 5 秒再处理；今天已更新的股票仍会跳过。界面显示当前进度，全部处理完成后返回菜单。
+
 ## 项目结构
 
 ```text
@@ -141,3 +145,30 @@ RegisterSmallTools<YourWorker>(
 ## 许可证
 
 本项目使用 Apache License 2.0，详见仓库根目录的 `LICENSE` 文件。
+
+
+## Lean 持仓情景模拟（Sandbox.Console）
+
+控制台菜单「Lean → 股票持仓情景模拟」统一负责数据库行情导出、历史窗口生成、独立进程运行 Lean、结果汇总。原 Sandbox.LeanDataExporter 功能已合并，不再需要单独导出程序。原有蒙特卡罗工具保留。
+
+先构建引擎和策略（默认相对目录为 repos/Lean 与 repos/work/Sandbox）：
+
+```powershell
+dotnet build ../../Lean/Launcher/QuantConnect.Lean.Launcher.csproj
+dotnet build Sandbox.Console/Lean/Strategy/Sandbox.LeanStrategy.csproj
+dotnet run --project Sandbox.Console
+```
+
+策略是单独的类库，源码放在 Console 的 Lean/Strategy 下；Console 主项目排除这些源码，避免引入引擎依赖。更换引擎后应重新编译策略。策略编译可传 `-p:LeanBin=引擎输出目录`。
+
+运行路径可通过 `Lean__Root`、`Lean__Launcher`、`Lean__Strategy`、`Lean__Results` 环境变量或 appsettings 对应的 Lean 配置项覆盖（建议绝对路径）。默认结果在 Console 输出目录的 LeanResults 下。默认数据库连接沿用 Console 的 ConnectionStrings:QuantResearch，不内置连接口令；选「已有 Lean 日线」只读本地 zip，不连接数据库。
+
+默认创世纪 300083：成本 11.90、起始股价 11.90（用户假设，非实时报价）、800 股、总预算 30000、每档预算 10000、相对成本跌 5%/10% 分别加仓一次、30 个自然日。输入实际股数和当前价格可替换默认值。默认均匀抽取 20 段历史窗口，每段对比加仓和不加仓，因此运行 40 次引擎；窗口数可调，Ctrl+C 取消当前批次并终止子进程。
+
+将完整历史窗口按起始股价同比例缩放，保留 OHLC 路径，第一根仅初始化持仓并提交限价单，之后由 Lean 撮合。每档数量按限价计算整手、含买入佣金预算；跳空成交价格改善时仍沿用原订单数量，不临时放大订单。佣金假设万 2.5、最低 5 元，无期末卖出。无成交量或一字 K 线不撮合；尚未完整模拟 A 股动态申报范围、涨跌停排队、实际流动性和交易日历。缺失工作日仅在该历史情景中设为休市，不作为未来日历。
+
+所有初始成本视为含历史费用。总预算 = 初始成本金额 + 现金；期末 Pnl 相对该预算，包含已有浮盈亏。起始股价与成本价分开录入。统计是重叠历史样本结果，不是未来胜率；也不能直接与旧独立 Python 计算混用。
+
+每批保存 request.json、输入行情快照、paths.json、summary.json；每个情景保存独立 config.json、Lean 原生结果与订单、scenario.json 和日志。不修改全局 Launcher/config.json，不覆盖原始行情。数据库导出仅取 EastMoney 前复权，排除上海时区当天尚未完成日线；本地输入同样排除当天，检查 OHLC、重复日期和排序。
+
+验证：`dotnet run --project tests/LeanChecks -- --engine` 使用合成行情检查真实引擎成交和资金；追加 `--history` 检查两个真实本地行情窗口。检查结果同样只写入忽略提交的 LeanResults。

@@ -14,14 +14,14 @@ namespace Sandbox.Infrastructure.ConsoleInfrastructure
             while (flag)
             {
                 var result = await RunOnceAsync();
-                
-                Console.WriteLine("本轮结束, 按任意键继续...");
-                Console.ReadLine();
 
                 if (result == WorkerLoopResult.Exit)
                 {
                     flag = false;
                 }
+
+                Console.WriteLine("本轮结束, 按任意键继续...");
+                Console.ReadLine();
             }
         }
 

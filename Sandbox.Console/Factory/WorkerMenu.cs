@@ -11,7 +11,9 @@ namespace Sandbox.Console.Factory
             System.Console.WriteLine("参数后面的 [内容] 是默认值，直接回车即可使用。输入 0 或 q 退出。");
 
             string? currentGroup = null;
-            foreach (var type in factory.Workers.Keys.OrderBy(type => (int)type))
+            foreach (var type in factory.Workers.Keys.OrderBy(type => (int)type)
+                .GroupBy(type => factory.Workers[type].Group)
+                .SelectMany(group => group))
             {
                 var item = factory.Workers[type];
                 if (currentGroup != item.Group)

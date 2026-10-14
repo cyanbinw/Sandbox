@@ -38,3 +38,6 @@ appsettings.*.Local.json
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Local Lean backtest output
+LeanResults/
